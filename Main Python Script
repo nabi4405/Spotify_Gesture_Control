@@ -1,0 +1,131 @@
+import os
+import threading
+import time
+from arduino.app_bricks.video_objectdetection import VideoObjectDetection
+from arduino.app_utils import App, Bridge
+import spotipy
+from spotipy.cache_handler import MemoryCacheHandler
+from spotipy.exceptions import SpotifyException
+from spotipy.oauth2 import SpotifyOAuth
+
+CONFIDENCE_THRESHOLD = 0.60
+DEBOUNCE_SEC = 1.2
+ACTION_COOLDOWN_SEC = 1.50
+
+# --- 1. PASTE YOUR CREDENTIALS HERE ---
+SPOTIFY_CLIENT_ID = ""
+SPOTIFY_CLIENT_SECRET = ""
+SPOTIFY_REDIRECT_URI = "https://example.com/callback"
+
+MY_ACCESS_TOKEN = "BQAQQjbzwwsJ1Ay6QwLgvEdt3GmFSr3xTUksYC__JCkUGFLvvOw7PFhfmkXcLgd9Zgo-KE4O-LLI04z8vzo7AxUkXZiraBAcpwSZEvXTCa459CZZSpH32XNtR0YJyasCzqHPEd7j0qA5yLqOQaK35evPhcAcCvDeYCFYA06JW7jM9NiXlE_OFbwWPctG3GZ275TaWK6QmM3AHaUW00RWcxVVG0eaBp8L17GuxA7RSWEFgwdbCSFmme2knVj-"
+MY_REFRESH_TOKEN = "AQDkqbf9Tq9A7kJeijtlkJBV5lkeHEzqCelAn6MFSS2aJ5dDn4oQnOmbetSwTYuIC_UQt0zvp7bS2cQplsGeg7NDe6YPK6vKVZj2A4MPDwW-j9ca4aKW5r3wdrV2ZEYUdvQ"
+
+token_dict = {
+    "access_token": MY_ACCESS_TOKEN,
+    "token_type": "Bearer",
+    "expires_in": 3600,
+    "refresh_token": MY_REFRESH_TOKEN,
+    "scope": "user-modify-playback-state",
+    "expires_at": int(time.time())
+    + 3500,  # Tells spotipy it's valid right now
+}
+
+memory_cache = MemoryCacheHandler(token_info=token_dict)
+
+sp = spotipy.Spotify(
+    auth_manager=SpotifyOAuth(
+        client_id=SPOTIFY_CLIENT_ID,
+        client_secret=SPOTIFY_CLIENT_SECRET,
+        redirect_uri=SPOTIFY_REDIRECT_URI,
+        scope="user-modify-playback-state",
+        cache_handler=memory_cache,  # Forces spotipy to use our memory variables above!
+        open_browser=False,
+    )
+)
+
+print("\n" + "=" * 50)
+print("[spotify] Verifying token from memory...")
+try:
+    user = sp.current_user()
+    print(
+        f"[spotify] SUCCESS! Connected as: {user.get('display_name', 'User')}"
+    )
+    print("[spotify] Ready to receive gestures!")
+except Exception as e:
+    print(f"[spotify] Error connecting: {e}")
+print("=" * 50 + "\n")
+
+detection_stream = VideoObjectDetection(
+    confidence=CONFIDENCE_THRESHOLD, debounce_sec=DEBOUNCE_SEC
+)
+
+_last_trigger_time = 0.0
+
+
+def send_to_mcu(label: str):
+    try:
+        Bridge.call("set_pixel_state", label)
+        print(f"[bridge] set_pixel_state -> {label}")
+    except Exception as e:
+        print(f"[bridge] failed to notify MCU: {e}")
+
+
+def send_to_spotify(label: str):
+    def _api_call():
+        try:
+            if label == "Play":
+                sp.start_playback()
+            elif label == "Pause":
+                sp.pause_playback()
+            elif label == "Next_Track":
+                sp.next_track()
+            elif label == "Previous_Track":
+                sp.previous_track()
+            print(f"[spotify] successfully sent -> {label}")
+        except SpotifyException as e:
+            if e.http_status == 404:
+                print(
+                    "[spotify] error: no active device found. Open Spotify on your phone and play a track first!"
+                )
+            elif e.http_status == 403:
+                print(
+                    "[spotify] error: permission denied. Check Premium status and scopes."
+                )
+            else:
+                print(f"[spotify] API error ({e.http_status}): {e.msg}")
+        except Exception as e:
+            print(f"[spotify] unexpected network error: {e}")
+
+    threading.Thread(target=_api_call, daemon=True).start()
+
+
+def handle_gesture(label: str):
+    global _last_trigger_time
+    now = time.time()
+    if now - _last_trigger_time < ACTION_COOLDOWN_SEC:
+        return
+    _last_trigger_time = now
+
+    print(f"[gesture] confirmed '{label}'")
+    send_to_mcu(label)
+    send_to_spotify(label)
+
+
+def send_detections_to_ui(detections: dict):
+    best_label = None
+    best_confidence = 0.0
+
+    for label, values in detections.items():
+        for value in values:
+            conf = value.get("confidence", 0.0)
+            if conf >= CONFIDENCE_THRESHOLD and conf > best_confidence:
+                best_confidence = conf
+                best_label = label
+
+    if best_label is not None:
+        handle_gesture(best_label)
+
+
+detection_stream.on_detect_all(send_detections_to_ui)
+
+App.run()
