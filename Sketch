@@ -1,0 +1,56 @@
+#include <Arduino_RouterBridge.h>
+#include <Modulino.h>
+
+ModulinoPixels leds;
+ModulinoBuzzer buzzer;
+int brightness = 25;
+
+void setup() {
+  Modulino.begin();
+  leds.begin();
+  buzzer.begin();
+
+  Bridge.begin();
+  // Function name must match exactly what Python calls:
+  // Bridge.call("set_pixel_state", label) in main.py
+  Bridge.provide("set_pixel_state", set_pixel_state);
+}
+
+void loop() {}
+
+// Called from Python whenever a gesture is confirmed.
+// label will be one of: "Play", "Pause", "Next_Track", "Previous_Track"
+void set_pixel_state(String label) {
+  if (label == "Pause") {
+    setAll(RED);
+    buzzer.tone(440, 120);              // single low beep
+  } else if (label == "Play") {
+    setAll(GREEN);
+    buzzer.tone(880, 120);              // single high beep
+  } else if (label == "Next_Track") {
+    setAll(BLUE);
+    buzzer.tone(660, 80);
+    delay(100);
+    buzzer.tone(880, 80);               // quick up-chirp = "next"
+  } else if (label == "Previous_Track") {
+    setAll(ModulinoColor(255, 140, 0)); // orange -- not a predefined constant, use RGB directly
+    buzzer.tone(880, 80);
+    delay(100);
+    buzzer.tone(660, 80);               // quick down-chirp = "previous"
+  } else {
+    setAll(ModulinoColor(0, 0, 0));     // off -- not a predefined constant, use RGB directly
+    return;
+  }
+
+  delay(600);       // hold the color/feedback briefly
+  leds.clear();
+  leds.show();
+}
+
+// Helper: sets all 8 pixels to the same ModulinoColor at the current brightness
+void setAll(ModulinoColor color) {
+  for (int i = 0; i < 8; i++) {
+    leds.set(i, color, brightness);
+  }
+  leds.show();
+}
