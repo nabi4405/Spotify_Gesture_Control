@@ -26,8 +26,7 @@ token_dict = {
     "expires_in": 3600,
     "refresh_token": MY_REFRESH_TOKEN,
     "scope": "user-modify-playback-state",
-    "expires_at": int(time.time())
-    + 3500,  # Tells spotipy it's valid right now
+    "expires_at": 0,  # Tells spotipy it's valid right now
 }
 
 memory_cache = MemoryCacheHandler(token_info=token_dict)
